@@ -12,5 +12,6 @@
       state: >-
         {% set iso_date = states('sensor.date_time_iso') %}
         {% set iso_ts = as_timestamp(iso_date) %}
-        {% set date = iso_ts|timestamp_custom('%d-%m-%Y') %}
-        {{ states('sensor.afvalwijzer_papier') == date }}
+        {% set current_date = iso_ts|timestamp_custom('%d-%m-%Y') %}
+        {% set current_time = iso_ts|timestamp_custom('%H:%M') %}
+        {{ current_date == states('sensor.afvalwijzer_papier') and current_hour == '17:30' }}

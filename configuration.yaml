@@ -1,0 +1,88 @@
+# Configure a default setup of Home Assistant (frontend, api, etc)
+default_config:
+mobile_app:
+discovery:
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.30.33.0/24
+    - 192.168.22.0/24
+
+recorder:
+  purge_keep_days: 7
+
+# Text to speech
+tts:
+  - platform: google_translate
+
+automation: !include automations.yaml
+frontend:
+  themes: !include_dir_merge_named themes
+group: !include_dir_merge_named groups
+light: !include_dir_merge_list lights/
+script: !include scripts.yaml
+scene: !include scenes.yaml
+sensor: !include_dir_merge_list sensors/
+template: !include templates.yaml
+
+homeassistant:
+  unit_system: metric
+  time_zone: Europe/Amsterdam
+  external_url: !secret external_url
+  internal_url: "http://homeassistant.local:8123/"
+
+weather:
+  - platform: buienradar
+
+mqtt:
+  broker: 192.168.22.200
+  port: 1883
+  client_id: HomeAssistant
+  keepalive: 60
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+
+utility_meter:
+  daily_energy_offpeak:
+    source: sensor.energy_delivered_t1
+    cycle: daily
+  daily_energy_peak:
+    source: sensor.energy_delivered_t2
+    cycle: daily
+  daily_gas:
+    source: sensor.gas_delivered
+    cycle: daily
+  monthly_energy_offpeak:
+    source: sensor.energy_delivered_t1
+    cycle: monthly
+  monthly_energy_peak:
+    source: sensor.energy_delivered_t2
+    cycle: monthly
+  monthly_gas:
+    source: sensor.gas_delivered
+    cycle: monthly
+
+octoprint:
+  host: octopi.local
+  api_key: !secret octoprint_api_key
+  sensors:
+    monitored_conditions:
+      - "Current State"
+      - "Job Percentage"
+
+binary_sensor:
+  - platform: octoprint
+    monitored_conditions:
+      - Printing
+      - Printing Error
+
+camera:
+  - platform: mjpeg
+    name: OctoPrint
+    still_image_url: http://octopi.local/webcam/?action=snapshot
+    mjpeg_url: http://octopi.local/webcam/?action=stream
+
+neato:
+  client_id: !secret neato_client_id
+  client_secret: !secret neato_client_secret

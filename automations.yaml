@@ -1,0 +1,20 @@
+- alias: "plug notification"
+  trigger:
+    platform: state
+    entity_id: switch.ledvance_plug_z3_c0581200_on_off
+    to: "on"
+  action:
+    - service: notify.mobile_app_iphone
+      data:
+        title: "Osram plug"
+        message: "The fucking plug is on"
+- alias: "recycle paper"
+  trigger:
+    platform: state
+    entity_id: binary_sensor.today_is_paper_recycle_day
+    to: "on"
+  action:
+    - service: notify.mobile_app_iphone
+      data:
+        title: "♻️ paper recycle day 📦"
+        message: "Put the paper and cardboard outside for pickup"

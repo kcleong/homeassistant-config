@@ -1,0 +1,24 @@
+- platform: group
+  name: Couch lights
+  entities:
+    - light.hue_filament_bulb_6
+    - light.hue_filament_bulb_6_2
+    - light.hue_filament_bulb_7
+
+- platform: group
+  name: Dumpling light
+  entities:
+    - light.hue_candle_1
+    - light.hue_candle_2
+
+- platform: group
+  name: Dinner table light
+  entities:
+    - light.hue_color_lamp_7
+    - light.hue_color_lamp_8
+
+- platform: group
+  name: Bulb lights
+  entities:
+    - light.hue_filament_bulb_4
+    - light.hue_filament_bulb_5

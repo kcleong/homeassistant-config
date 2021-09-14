@@ -1,0 +1,102 @@
+### sensor: ###
+### DSMR-WS ###
+
+- platform: mqtt
+  name: "DSMR Last Update"
+  state_topic: "DSMR-WS/JSON/timestamp"
+  unit_of_measurement: ""
+  value_template: "{{ strptime(value_json.timestamp[0].value, '%y%m%d%H%M%SS') }}"
+
+- platform: mqtt
+  name: "Energy Delivered T1"
+  state_topic: "DSMR-WS/JSON/energy_delivered_tariff1"
+  unit_of_measurement: "kWh"
+  value_template: "{{ value_json.energy_delivered_tariff1[0].value | round(3) }}"
+
+- platform: mqtt
+  name: "Energy Delivered T2"
+  state_topic: "DSMR-WS/JSON/energy_delivered_tariff2"
+  unit_of_measurement: "kWh"
+  value_template: "{{ value_json.energy_delivered_tariff2[0].value | round(3) }}"
+
+# - platform: mqtt
+#   name: "Energy Returned T1"
+#   state_topic: "DSMR-WS/JSON/energy_returned_tariff1"
+#   unit_of_measurement: "kWh"
+#   value_template: '{{ value_json.energy_returned_tariff1.value | round(3) }}'
+
+# - platform: mqtt
+#   name: "Energy Returned T2"
+#   state_topic: "DSMR-WS/JSON/energy_returned_tariff2"
+#   unit_of_measurement: "kWh"
+#   value_template: '{{ value_json.energy_returned_tariff2.value | round(3) }}'
+
+- platform: mqtt
+  name: "Power Delivered"
+  state_topic: "DSMR-WS/JSON/power_delivered"
+  unit_of_measurement: "Watt"
+  value_template: "{{ value_json.power_delivered[0].value * 1000 | round(0) }}"
+
+# - platform: mqtt
+#   name: "Power Returned"
+#   state_topic: "DSMR-WS/JSON/power_returned"
+#   unit_of_measurement: "kW"
+#   value_template: "{{ value_json.power_returned.value | round(3) }}"
+
+- platform: mqtt
+  name: "Power Delivered l1"
+  state_topic: "DSMR-WS/JSON/power_delivered_l1"
+  unit_of_measurement: "kW"
+  value_template: "{{ value_json.power_delivered_l1[0].value | round(3) }}"
+
+- platform: mqtt
+  name: "Power Delivered l2"
+  state_topic: "DSMR-WS/JSON/power_delivered_l2"
+  unit_of_measurement: "kW"
+  value_template: "{{ value_json.power_delivered_l2[0].value | round(3) }}"
+
+- platform: mqtt
+  name: "Power Delivered l3"
+  state_topic: "DSMR-WS/JSON/power_delivered_l3"
+  unit_of_measurement: "kW"
+  value_template: "{{ value_json.power_delivered_l3[0].value | round(3) }}"
+
+# - platform: mqtt
+#   name: "Power Returned l1"
+#   state_topic: "DSMR-WS/JSON/power_returned_l1"
+#   unit_of_measurement: "Watt"
+#   value_template: '{{ value_json.power_returned_l1.value | round(1) }}'
+
+# - platform: mqtt
+#   name: "Power Returned l2"
+#   state_topic: "DSMR-WS/JSON/power_returned_l2"
+#   unit_of_measurement: "Watt"
+#   value_template: '{{ value_json.power_returned_l2.value | round(1) }}'
+
+# - platform: mqtt
+#   name: "Power Returned l3"
+#   state_topic: "DSMR-WS/JSON/power_returned_l3"
+#   unit_of_measurement: "Watt"
+#   value_template: '{{ value_json.power_returned_l3.value | round(1) }}'
+
+- platform: mqtt
+  name: "Gas Delivered"
+  state_topic: "DSMR-WS/JSON/gas_delivered"
+  #  value_template: "{{ value_json.Value | float | round(2) }}"
+  unit_of_measurement: m³
+  device_class: gas
+  state_class: total_increasing
+  value_template: "{{ value_json.gas_delivered[0].value | round(2) }}"
+  last_reset_value_template: "1970-01-01T00:00:00+00:00"
+  last_reset_topic: "DSMR-WS/JSON/DummyResetTopic"
+
+- platform: template
+  sensors:
+    daily_energy:
+      friendly_name: Daily Energy
+      unit_of_measurement: kWh
+      value_template: "{{ states('sensor.daily_energy_offpeak')|float + states('sensor.daily_energy_peak')|float }}"
+    monthly_energy:
+      friendly_name: Monthly Energy
+      unit_of_measurement: kWh
+      value_template: "{{ states('sensor.monthly_energy_offpeak')|float + states('sensor.monthly_energy_peak')|float }}"

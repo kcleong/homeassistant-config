@@ -1,0 +1,7 @@
+- platform: afvalwijzer
+  provider: mijnafvalwijzer # (required, default = mijnafvalwijzer) either choose mijnafvalwijzer or afvalstoffendienstkalender
+  postal_code: !secret postal_code # (required, default = '')
+  street_number: !secret street_number # (required, default = '')
+  suffix: "" # (optional, default = '')
+  include_date_today: false # (optional, default = false) to take or not to take Today into account in the next pickup.
+  default_label: Geen # (optional, default = Geen) label if no date found

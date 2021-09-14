@@ -1,0 +1,10 @@
+- platform: nut
+  host: 192.168.22.2
+  alias: ups_apc
+  resources:
+    - ups.load
+    - input.voltage
+    - battery.runtime
+    - battery.voltage
+    - battery.charge
+    - ups.realpower.nominal

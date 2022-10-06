@@ -12,7 +12,7 @@ from cryptography.fernet import InvalidToken
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.entity_registry import EntityRegistry, async_get_registry
+from homeassistant.helpers.entity_registry import EntityRegistry, async_get
 from homeassistant.helpers.event import async_track_time_interval
 
 from ..helpers.const import *
@@ -138,6 +138,7 @@ class EdgeOSHomeAssistant:
             self._data_manager = EdgeOSData(
                 self._hass, self._config_manager, self.update
             )
+
             self._device_manager = DeviceManager(self._hass, self)
             self._entity_manager = EntityManager(self._hass, self)
 
@@ -158,12 +159,14 @@ class EdgeOSHomeAssistant:
             )
 
     async def initialize(self):
-        self._entity_registry = await async_get_registry(self._hass)
+        self._entity_registry = async_get(self._hass)
 
         load = self._hass.config_entries.async_forward_entry_setup
 
         for domain in SIGNALS:
             await load(self._config_manager.config_entry, domain)
+
+        self.register_service_generate_debug_file()
 
         self._is_initialized = True
 
@@ -237,6 +240,12 @@ class EdgeOSHomeAssistant:
 
         await self.discover_all()
 
+    def register_service_generate_debug_file(self):
+        self._hass.services.async_register(DOMAIN, GENERATE_DEBUG_FILE, self.async_service_generate_debug_file)
+
+    async def async_service_generate_debug_file(self, call_service):
+        await self._storage_manager.async_save_debug_to_store(self.data_manager.system_data)
+
     def update(self):
         try:
             default_device_info = self.device_manager.get(DEFAULT_NAME)
@@ -289,20 +298,3 @@ class EdgeOSHomeAssistant:
             line_number = tb.tb_lineno
 
             _LOGGER.error(f"Failed to delete_entity, Error: {ex}, Line: {line_number}")
-
-    def service_save_debug_data(self):
-        _LOGGER.debug(f"Save Debug Data")
-
-        try:
-            path = self._hass.config.path(EDGEOS_DATA_LOG)
-
-            with open(path, "w+") as out:
-                out.write(str(self.data_manager.edgeos_data))
-
-        except Exception as ex:
-            exc_type, exc_obj, tb = sys.exc_info()
-            line_number = tb.tb_lineno
-
-            _LOGGER.error(
-                f"Failed to log EdgeOS data, Error: {ex}, Line: {line_number}"
-            )

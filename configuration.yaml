@@ -43,6 +43,10 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
 
+  # binary_sensor: !include mqtt/binary_sensors.yaml
+  sensor: !include mqtt/sensors.yaml
+  # switch: !include mqtt/switches.yaml
+
 utility_meter:
   daily_energy_offpeak:
     source: sensor.energy_delivered_t1

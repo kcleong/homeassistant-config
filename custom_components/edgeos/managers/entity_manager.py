@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from datetime import date
 import logging
 import sys
 from typing import Dict, List, Optional
@@ -6,6 +9,7 @@ from homeassistant.components.device_tracker import ATTR_SOURCE_TYPE, SOURCE_TYP
 from homeassistant.const import ATTR_FRIENDLY_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_registry import EntityRegistry
+from homeassistant.helpers.typing import StateType
 
 from ..helpers.const import *
 from ..managers.data_manager import EdgeOSData
@@ -53,10 +57,13 @@ class EntityManager:
         return self.data_manager.system_data
 
     def set_domain_component(self, domain, async_add_entities, component):
-        self.domain_component_manager[domain] = {
-            "async_add_entities": async_add_entities,
-            "component": component,
-        }
+        if domain in self.domain_component_manager:
+            _LOGGER.warning(f'Domain {domain} already set up')
+        else:
+            self.domain_component_manager[domain] = {
+                "async_add_entities": async_add_entities,
+                "component": component,
+            }
 
     def is_device_name_in_use(self, device_name):
         result = False
@@ -68,7 +75,7 @@ class EntityManager:
 
         return result
 
-    def get_all_entities(self) -> List[EntityData]:
+    def get_all_entities(self) -> list[EntityData]:
         entities = []
         for domain in self.entities:
             for name in self.entities[domain]:
@@ -82,12 +89,12 @@ class EntityManager:
         if domain not in self.entities:
             self.entities[domain] = {}
 
-    def get_entities(self, domain) -> Dict[str, EntityData]:
+    def get_entities(self, domain) -> dict[str, EntityData]:
         self.check_domain(domain)
 
         return self.entities[domain]
 
-    def get_entity(self, domain, name) -> Optional[EntityData]:
+    def get_entity(self, domain, name) -> EntityData | None:
         entities = self.get_entities(domain)
         entity = entities.get(name)
 
@@ -108,18 +115,12 @@ class EntityManager:
             )
 
     def create_components(self):
-        system_state = self.system_data.get(SYSTEM_STATS_KEY)
-        api_last_update = self.system_data.get(ATTR_API_LAST_UPDATE)
-        web_socket_last_update = self.system_data.get(ATTR_WEB_SOCKET_LAST_UPDATE)
+        for entity_type in STATS_MAPS.keys():
+            self.create_entities(entity_type)
 
-        self.create_interface_binary_sensors()
-        self.create_device_binary_sensors()
         self.create_device_trackers()
         self.create_unknown_devices_sensor()
-        self.create_uptime_sensor(system_state, api_last_update, web_socket_last_update)
-        self.create_system_status_binary_sensor(
-            system_state, api_last_update, web_socket_last_update
-        )
+        self.create_system_status_binary_sensor()
 
     def update(self):
         self.hass.async_create_task(self._async_update())
@@ -127,11 +128,6 @@ class EntityManager:
     async def _async_update(self):
         step = "Mark as ignore"
         try:
-            entities_to_delete = []
-
-            for entity in self.get_all_entities():
-                entities_to_delete.append(entity.unique_id)
-
             step = "Create components"
 
             self.create_components()
@@ -159,9 +155,6 @@ class EntityManager:
 
                     if entity.status == ENTITY_STATUS_CREATED:
                         entity_item = self.entity_registry.async_get(entity_id)
-
-                        if entity.unique_id in entities_to_delete:
-                            entities_to_delete.remove(entity.unique_id)
 
                         step = f"Mark as created - {domain} -> {entity_key}"
 
@@ -202,17 +195,6 @@ class EntityManager:
                 if len(entities_to_add) > 0:
                     async_add_entities(entities_to_add, True)
 
-            if len(entities_to_delete) > 0:
-                _LOGGER.info(f"Following items will be deleted: {entities_to_delete}")
-
-                for domain in SIGNALS:
-                    entities = dict(self.get_entities(domain))
-
-                    for entity_key in entities:
-                        entity = entities[entity_key]
-                        if entity.unique_id in entities_to_delete:
-                            await self.ha.delete_entity(domain, entity.name)
-
         except Exception as ex:
             self.log_exception(ex, f"Failed to update, step: {step}")
 
@@ -228,103 +210,105 @@ class EntityManager:
         except Exception as ex:
             self.log_exception(ex, "Failed to updated device trackers")
 
-    def create_device_binary_sensors(self):
+    def create_entities(self, entity_type):
+        _LOGGER.debug(f"Creating entities for '{entity_type}'")
+
+        all_data = self.system_data.get(entity_type)
+        monitored_data = self._get_monitored_data(entity_type)
+        stats_keys = STATS_MAPS[entity_type]
+
+        _LOGGER.debug(f"Entities for '{entity_type}' including items: {monitored_data}")
+
+        for item in monitored_data:
+            data = all_data.get(item)
+
+            if data is None:
+                _LOGGER.info(f"{entity_type} '{item}' was not found, please update the integration's settings")
+            else:
+                name = data.get(ATTR_NAME, item)
+
+                self.create_main_binary_sensor(item, name, data, entity_type)
+
+                for stats_key in stats_keys:
+                    self.create_stats_sensor(item, name, data, stats_key, entity_type)
+
+    def create_main_binary_sensor(self, item, name, data, data_type):
+        sensor_type = SENSOR_TYPES[data_type]
+
         try:
-            devices = self.system_data.get(STATIC_DEVICES_KEY)
+            entity_name = f"{self.integration_title} {sensor_type} {name}"
+            icon = ICONS[sensor_type]
+            attributes = self._get_attributes(data_type, data)
 
-            for hostname in devices:
-                host_data = devices.get(hostname, {})
+            attributes[ATTR_FRIENDLY_NAME] = entity_name
 
-                self.create_device_binary_sensor(hostname, host_data)
+            state = data.get(LINK_CONNECTED, FALSE_STR)
 
-        except Exception as ex:
-            self.log_exception(ex, "Failed to updated devices")
+            is_on = str(state).lower() == TRUE_STR
 
-    def create_interface_binary_sensors(self):
-        try:
-            interfaces = self.system_data.get(INTERFACES_KEY)
-
-            for interface in interfaces:
-                interface_data = interfaces.get(interface)
-
-                self.create_interface_binary_sensor(interface, interface_data)
-
-        except Exception as ex:
-            self.log_exception(ex, f"Failed to update {INTERFACES_KEY}")
-
-    def create_interface_binary_sensor(self, key, data):
-        self.create_binary_sensor(
-            key,
-            data,
-            self.config_data.monitored_interfaces,
-            SENSOR_TYPE_INTERFACE,
-            LINK_CONNECTED,
-            self.get_interface_attributes,
-        )
-
-    def create_device_binary_sensor(self, key, data):
-        self.create_binary_sensor(
-            key,
-            data,
-            self.config_data.monitored_devices,
-            SENSOR_TYPE_DEVICE,
-            CONNECTED,
-            self.get_device_attributes,
-        )
-
-    def create_binary_sensor(
-        self, key, data, allowed_items, sensor_type, main_attribute, get_attributes
-    ):
-        try:
-            if key in allowed_items:
-                entity_name = f"{self.integration_title} {sensor_type} {key}"
-
-                main_entity_details = data.get(main_attribute, FALSE_STR)
-
-                attributes = {
-                    ATTR_DEVICE_CLASS: DEVICE_CLASS_CONNECTIVITY,
-                    ATTR_FRIENDLY_NAME: entity_name,
-                }
-
-                for data_item_key in data:
-                    if data_item_key != main_attribute:
-                        value = data.get(data_item_key)
-                        attr = get_attributes(data_item_key)
-
-                        name = attr.get(ATTR_NAME, data_item_key)
-                        unit_of_measurement = attr.get(ATTR_UNIT_OF_MEASUREMENT)
-
-                        if unit_of_measurement is None:
-                            attributes[name] = value
-                        else:
-                            name = name.format(self.config_data.unit)
-
-                            attributes[name] = (int(value)) / self.config_data.unit_size
-
-                is_on = str(main_entity_details).lower() == TRUE_STR
-
-                current_entity = self.get_entity(DOMAIN_BINARY_SENSOR, entity_name)
-
-                attributes[ATTR_LAST_CHANGED] = datetime.now().strftime(
-                    DEFAULT_DATE_FORMAT
-                )
-
-                if current_entity is not None and current_entity.state == is_on:
-                    entity_attributes = current_entity.attributes
-                    attributes[ATTR_LAST_CHANGED] = entity_attributes.get(
-                        ATTR_LAST_CHANGED
-                    )
-
-                icon = ICONS[sensor_type]
-
-                self.create_entity(
-                    DOMAIN_BINARY_SENSOR, entity_name, is_on, attributes, icon
-                )
+            self.create_binary_sensor_entity(
+                entity_name, is_on, attributes, BinarySensorDeviceClass.CONNECTIVITY, icon
+            )
 
         except Exception as ex:
             self.log_exception(
                 ex,
-                f"Failed to create {key} sensor {sensor_type} with the following data: {data}",
+                f"Failed to create {sensor_type}'s main binary sensor for '{item}', data: {data}",
+            )
+
+    def create_stats_sensor(self, item, name, data, stats_key, data_type):
+        sensor_type = SENSOR_TYPES[data_type]
+
+        try:
+            stats_map = STATS_MAPS[data_type]
+            stats_name = stats_key.capitalize()
+            unit_of_measurement = UNIT_PACKETS
+            value = data.get(stats_key)
+            value_factor = 1
+            state_class = stats_map[stats_key]
+            icon = ICONS[sensor_type]
+
+            if "_" in stats_key:
+                stats_parts = stats_key.split("_")
+                stats_prefix = stats_parts[0]
+                unit_of_measurement = stats_parts[1].capitalize()
+                stats_direction = STATS_DIRECTION[stats_prefix]
+
+                if unit_of_measurement.lower() == UNIT_DROPPED_PACKETS.lower():
+                    stats_name = f"{UNIT_DROPPED_PACKETS} {UNIT_PACKETS} {stats_direction}"
+                    unit_of_measurement = UNIT_PACKETS
+
+                elif unit_of_measurement.lower() in [UNIT_BPS.lower(), UNIT_RATE.lower()]:
+                    stats_name = f"{UNIT_RATE} {stats_direction}"
+                    unit_of_measurement = f"{self.config_data.unit}/ps"
+                    value_factor = self.config_data.unit_size
+
+                elif unit_of_measurement.lower() == UNIT_BYTES.lower():
+                    stats_name = f"{UNIT_TRAFFIC} {stats_direction}"
+                    unit_of_measurement = self.config_data.unit
+                    value_factor = self.config_data.unit_size
+
+                else:
+                    stats_name = f"{unit_of_measurement.capitalize()} {stats_direction}"
+
+            if value is not None and value_factor is not None and value_factor > 1:
+                value = float(float(value) / float(value_factor))
+
+            entity_name = f"{self.integration_title} {sensor_type} {name} {stats_name}"
+
+            attributes = {
+                ATTR_FRIENDLY_NAME: entity_name,
+                ATTR_UNIT_OF_MEASUREMENT: unit_of_measurement
+            }
+
+            self.create_sensor_entity(
+                entity_name, value, attributes, state_class, icon
+            )
+
+        except Exception as ex:
+            self.log_exception(
+                ex,
+                f"Failed to create {sensor_type}'s '{stats_key}' sensor for '{item}', data: {data}",
             )
 
     def create_unknown_devices_sensor(self):
@@ -340,49 +324,26 @@ class EntityManager:
             attributes = {
                 ATTR_FRIENDLY_NAME: entity_name,
                 ATTR_UNKNOWN_DEVICES: unknown_devices,
+                ATTR_UNIT_OF_MEASUREMENT: UNIT_DEVICES
             }
 
-            self.create_entity(
-                DOMAIN_SENSOR, entity_name, state, attributes, "mdi:help-rhombus"
+            self.create_sensor_entity(
+                entity_name, state, attributes, SensorStateClass.MEASUREMENT, "mdi:help-rhombus"
             )
         except Exception as ex:
             self.log_exception(
                 ex, f"Failed to create unknown device sensor, Data: {unknown_devices}"
             )
 
-    def create_uptime_sensor(
-        self, system_state, api_last_update, web_socket_last_update
-    ):
+    def create_system_status_binary_sensor(self):
         try:
-            entity_name = f"{self.integration_title} {ATTR_SYSTEM_UPTIME}"
+            system_state = self.system_data.get(SYSTEM_STATS_KEY)
+            api_last_update = self.system_data.get(ATTR_API_LAST_UPDATE)
+            web_socket_last_update = self.system_data.get(ATTR_WEB_SOCKET_LAST_UPDATE)
+            messages_received = self.system_data.get(ATTR_WEB_SOCKET_MESSAGES_RECEIVED)
+            messages_ignored = self.system_data.get(ATTR_WEB_SOCKET_MESSAGES_IGNORED)
+            messages_handled_percentage = self.system_data.get(ATTR_WEB_SOCKET_MESSAGES_HANDLED_PERCENTAGE)
 
-            state = system_state.get(UPTIME, 0)
-            attributes = {}
-
-            if system_state is not None:
-                attributes = {
-                    ATTR_UNIT_OF_MEASUREMENT: ATTR_SECONDS,
-                    ATTR_FRIENDLY_NAME: entity_name,
-                    ATTR_API_LAST_UPDATE: api_last_update.strftime(DEFAULT_DATE_FORMAT),
-                    ATTR_WEB_SOCKET_LAST_UPDATE: web_socket_last_update.strftime(
-                        DEFAULT_DATE_FORMAT
-                    ),
-                }
-
-                for key in system_state:
-                    if key != UPTIME:
-                        attributes[key] = system_state[key]
-
-            self.create_entity(
-                DOMAIN_SENSOR, entity_name, state, attributes, "mdi:timer-sand"
-            )
-        except Exception as ex:
-            self.log_exception(ex, "Failed to create system sensor")
-
-    def create_system_status_binary_sensor(
-        self, system_state, api_last_update, web_socket_last_update
-    ):
-        try:
             entity_name = f"{self.integration_title} {ATTR_SYSTEM_STATUS}"
 
             attributes = {}
@@ -390,12 +351,15 @@ class EntityManager:
 
             if system_state is not None:
                 attributes = {
-                    ATTR_DEVICE_CLASS: DEVICE_CLASS_CONNECTIVITY,
+                    UPTIME: system_state.get(UPTIME, 0),
                     ATTR_FRIENDLY_NAME: entity_name,
                     ATTR_API_LAST_UPDATE: api_last_update.strftime(DEFAULT_DATE_FORMAT),
                     ATTR_WEB_SOCKET_LAST_UPDATE: web_socket_last_update.strftime(
                         DEFAULT_DATE_FORMAT
                     ),
+                    ATTR_WEB_SOCKET_MESSAGES_RECEIVED: messages_received,
+                    ATTR_WEB_SOCKET_MESSAGES_IGNORED: messages_ignored,
+                    ATTR_WEB_SOCKET_MESSAGES_HANDLED_PERCENTAGE: messages_handled_percentage
                 }
 
                 for key in system_state:
@@ -406,8 +370,8 @@ class EntityManager:
 
             icon = CONNECTED_ICONS[is_alive]
 
-            self.create_entity(
-                DOMAIN_BINARY_SENSOR, entity_name, is_alive, attributes, icon
+            self.create_binary_sensor_entity(
+                entity_name, is_alive, attributes, BinarySensorDeviceClass.CONNECTIVITY, icon
             )
         except Exception as ex:
             self.log_exception(ex, "Failed to create system status binary sensor")
@@ -423,18 +387,9 @@ class EntityManager:
 
                 attributes = {ATTR_SOURCE_TYPE: SOURCE_TYPE_ROUTER, CONF_HOST: host}
 
-                for data_item_key in data:
-                    value = data.get(data_item_key)
-                    attr = self.get_device_attributes(data_item_key)
+                entity = self.get_basic_entity(entity_name, DOMAIN_DEVICE_TRACKER, state, attributes)
 
-                    name = attr.get(ATTR_NAME, data_item_key)
-
-                    if ATTR_UNIT_OF_MEASUREMENT not in attr:
-                        attributes[name] = value
-
-                self.create_entity(
-                    DOMAIN_DEVICE_TRACKER, entity_name, state, attributes
-                )
+                self.set_entity(DOMAIN_DEVICE_TRACKER, entity_name, entity)
 
         except Exception as ex:
             self.log_exception(
@@ -442,13 +397,72 @@ class EntityManager:
                 f"Failed to create {host} device tracker with the following data: {data}",
             )
 
-    def create_entity(
+    def create_binary_sensor_entity(
         self,
-        domain: str,
         name: str,
         state: int,
         attributes: dict,
-        icon: Optional[str] = None,
+        device_class: BinarySensorDeviceClass | None = None,
+        icon: str | None = None,
+    ):
+        entity = self.get_basic_entity(name, DOMAIN_BINARY_SENSOR, state, attributes, icon)
+
+        entity.binary_sensor_device_class = device_class
+
+        self.set_entity(DOMAIN_BINARY_SENSOR, name, entity)
+
+    def create_sensor_entity(
+        self,
+        name: str,
+        state: StateType | date | datetime,
+        attributes: dict,
+        state_class: SensorStateClass | None = None,
+        icon: str | None = None,
+    ):
+        entity = self.get_basic_entity(name, DOMAIN_BINARY_SENSOR, state, attributes, icon)
+
+        entity.sensor_state_class = state_class
+
+        self.set_entity(DOMAIN_SENSOR, name, entity)
+
+    def _get_monitored_data(self, key):
+        result = []
+
+        if key == STATIC_DEVICES_KEY:
+            result = self.config_data.monitored_devices
+
+        elif key == INTERFACES_KEY:
+            result = self.config_data.monitored_interfaces
+
+        return result
+
+    @staticmethod
+    def _get_attributes(key, data):
+        attributes = {}
+
+        if key == STATIC_DEVICES_KEY:
+            attributes = {
+                "MAC": data.get("mac"),
+                "Address": data.get("ip"),
+            }
+        elif key == INTERFACES_KEY:
+            attributes = {
+                LINK_ENABLED: data.get(LINK_ENABLED, FALSE_STR),
+                "Link Speed (Mbps)": data.get("speed"),
+                "Duplex": data.get("duplex"),
+                "MAC": data.get("mac"),
+                "Address": ", ".join(data.get("addresses", [])),
+            }
+
+        return attributes
+
+    @staticmethod
+    def get_basic_entity(
+        name: str,
+        domain: str,
+        state: float,
+        attributes: dict,
+        icon: str | None = None,
     ):
         entity = EntityData()
 
@@ -461,21 +475,7 @@ class EntityManager:
         if icon is not None:
             entity.icon = icon
 
-        self.set_entity(domain, name, entity)
-
-    @staticmethod
-    def get_device_attributes(key):
-        result = DEVICE_SERVICES_STATS_MAP.get(key, {})
-
-        return result
-
-    @staticmethod
-    def get_interface_attributes(key):
-        all_attributes = {**INTERFACES_MAIN_MAP, **INTERFACES_STATS_MAP}
-
-        result = all_attributes.get(key, {})
-
-        return result
+        return entity
 
     @staticmethod
     def log_exception(ex, message):

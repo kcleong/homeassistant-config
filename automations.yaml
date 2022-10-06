@@ -18,3 +18,35 @@
       data:
         title: "♻️ paper recycle day 📦"
         message: "Put the paper and cardboard outside for pickup"
+- alias: "smoke detector living"
+  trigger:
+    platform: state
+    entity_id: binary_sensor.heiman_smokesensor_ef_3_0_99427ffe_ias_zone
+    to: "on"
+  action:
+    - service: notify.mobile_app_iphone
+      data:
+        title: "🔥 Smoke detected in the living room"
+        message: "Heiman smoke detector sounded an alarm"
+
+- alias: "smoke detector hallway"
+  trigger:
+    platform: state
+    entity_id: binary_sensor.heiman_smokesensor_ef_3_0_ias_zone
+    to: "on"
+  action:
+    - service: notify.mobile_app_iphone
+      data:
+        title: "🔥 Smoke detected in the hallway"
+        message: "Heiman smoke detector sounded an alarm"
+
+- alias: "smoke detector storage room"
+  trigger:
+    platform: state
+    entity_id: binary_sensor.heiman_smokesensor_ef_3_0_1733adfe_ias_zone
+    to: "on"
+  action:
+    - service: notify.mobile_app_iphone
+      data:
+        title: "🔥 Smoke detected in the storage room"
+        message: "Heiman smoke detector sounded an alarm"

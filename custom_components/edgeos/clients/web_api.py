@@ -128,7 +128,7 @@ class EdgeOSWebAPI:
                         if "EDGE.DeviceModel" in line:
                             line_parts = line.split(" = ")
                             value = line_parts[len(line_parts) - 1]
-                            self._product = value.replace("'", "")
+                            self._product = value.replace("'", EMPTY_STRING)
                 else:
                     _LOGGER.error(f"Failed to login, Invalid credentials")
 
@@ -165,25 +165,27 @@ class EdgeOSWebAPI:
             retry_attempt = retry_attempt + 1
 
             try:
-                async with self._session.get(url, ssl=False) as response:
-                    status = response.status
+                if self._session is not None:
+                    async with self._session.get(url, ssl=False) as response:
+                        status = response.status
 
-                    message = (
-                        f"URL: {url}, Status: {response.reason} ({response.status})"
-                    )
+                        message = (
+                            f"URL: {url}, Status: {response.reason} ({response.status})"
+                        )
 
-                    if status < 400:
-                        result = await response.json()
-                        break
-                    elif status == 403:
-                        self._session = None
-                        self._cookies = {}
+                        if status < 400:
+                            result = await response.json()
+                            break
+                        elif status == 403:
+                            self._session = None
+                            self._cookies = {}
 
-                        break
+                            break
 
             except Exception as ex:
                 exc_type, exc_obj, tb = sys.exc_info()
                 line_number = tb.tb_lineno
+
                 message = f"URL: {url}, Error: {ex}, Line: {line_number}"
 
         valid_response = status < 400

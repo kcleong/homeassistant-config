@@ -6,7 +6,9 @@ https://home-assistant.io/components/edgeos/
 import asyncio
 import json
 import logging
+import numbers
 import re
+import sys
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -32,9 +34,11 @@ class EdgeOSWebSocket:
         self._topics = topics
         self._session = None
         self._ws = None
-        self._pending_payloads = []
         self.shutting_down = False
         self._is_connected = False
+        self._previous_message = None
+        self._messages_received = 0
+        self._messages_ignored = 0
 
     @property
     def config_data(self) -> Optional[ConfigData]:
@@ -67,7 +71,10 @@ class EdgeOSWebSocket:
                 )
 
         except Exception as ex:
-            _LOGGER.warning(f"Failed to create session of EdgeOS WS, Error: {str(ex)}")
+            exc_type, exc_obj, tb = sys.exc_info()
+            line_number = tb.tb_lineno
+
+            _LOGGER.warning(f"Failed to create session of EdgeOS WS, Error: {str(ex)}, Line: {line_number}")
 
         try:
             async with self._session.ws_connect(
@@ -77,8 +84,8 @@ class EdgeOSWebSocket:
                 autoclose=True,
                 max_msg_size=MAX_MSG_SIZE,
                 timeout=SCAN_INTERVAL_WS_TIMEOUT,
+                compress=WS_MESSAGE_COMPRESSION
             ) as ws:
-
                 self._is_connected = True
 
                 self._ws = ws
@@ -88,7 +95,10 @@ class EdgeOSWebSocket:
             if self._session is not None and self._session.closed:
                 _LOGGER.info(f"WS Session closed")
             else:
-                _LOGGER.warning(f"Failed to connect EdgeOS WS, Error: {ex}")
+                exc_type, exc_obj, tb = sys.exc_info()
+                line_number = tb.tb_lineno
+
+                _LOGGER.warning(f"Failed to connect EdgeOS WS, Error: {ex}, Line: {line_number}")
 
         self._is_connected = False
 
@@ -101,38 +111,99 @@ class EdgeOSWebSocket:
         return is_initialized
 
     @property
+    def messages_handled_percentage(self):
+        received = self.messages_received
+        ignored = self.messages_ignored
+
+        percentage = 0 if received == 0 else (received - ignored) / received
+        result = f"{percentage:.3%}"
+
+        return result
+
+    @property
+    def messages_ignored(self):
+        result = self._messages_ignored
+
+        return result
+
+    @property
+    def messages_received(self):
+        result = self._messages_received
+
+        return result
+
+    @property
     def last_update(self):
         result = self._last_update
 
         return result
 
-    def parse_message(self, message):
-        parsed = False
+    def get_corrected_message(self, message):
+        original_message = message
+        previous_message = self._previous_message.get("Content")
+        previous_message_length = self._previous_message.get("Length")
 
+        self._previous_message = None
+
+        message = f"{previous_message}{message}"
+        new_message_length = len(message) - len(str(previous_message_length)) - 1
+
+        if new_message_length > previous_message_length:
+            _LOGGER.debug(
+                f"Ignored partial message, "
+                f"Expected {previous_message_length} chars, "
+                f"Provided {new_message_length}, "
+                f"Content: {message}"
+            )
+
+            message = original_message
+
+        else:
+            self._messages_ignored -= 1
+            _LOGGER.debug("Partial message corrected")
+
+        return message
+
+    async def parse_message(self, message):
         try:
-            message = message.replace(NEW_LINE, EMPTY_STRING)
-            message = re.sub(BEGINS_WITH_SIX_DIGITS, EMPTY_STRING, message)
+            self._messages_received += 1
 
-            if len(self._pending_payloads) > 0:
-                message_previous = "".join(self._pending_payloads)
-                message = f"{message_previous}{message}"
+            if self._previous_message is not None:
+                message = self.get_corrected_message(message)
 
-            if len(message) > 0:
-                payload_json = json.loads(message)
+            if message is not None:
+                message_json = re.sub(BEGINS_WITH_SIX_DIGITS, EMPTY_STRING, message)
 
-                self._edgeos_callback(payload_json)
-                parsed = True
+                if len(message_json.strip()) > 0:
+                    payload_json = json.loads(message_json)
+
+                    await self._edgeos_callback(payload_json)
             else:
-                _LOGGER.debug("Parse message skipped (Empty)")
+                self._messages_ignored += 1
+
+        except ValueError:
+            self._messages_ignored += 1
+
+            previous_messages = re.findall(BEGINS_WITH_SIX_DIGITS, message)
+
+            if previous_messages is None or len(previous_messages) == 0:
+                _LOGGER.warning("Failed to store partial message for later processing")
+
+            else:
+                length = int(previous_messages[0])
+
+                self._previous_message = {
+                    "Length": length,
+                    "Content": message
+                }
+
+                _LOGGER.debug("Store partial message for later processing")
 
         except Exception as ex:
-            _LOGGER.debug(f"Parse message failed due to partial payload, Error: {ex}")
+            exc_type, exc_obj, tb = sys.exc_info()
+            line_number = tb.tb_lineno
 
-        finally:
-            if parsed or len(self._pending_payloads) > MAX_PENDING_PAYLOADS:
-                self._pending_payloads = []
-            else:
-                self._pending_payloads.append(message)
+            _LOGGER.warning(f"Parse message failed, Data: {message}, Error: {ex}, Line: {line_number}")
 
     async def async_send_heartbeat(self):
         _LOGGER.debug(f"Keep alive message sent")
@@ -143,26 +214,36 @@ class EdgeOSWebSocket:
             await self._ws.send_str(data)
 
     async def listen(self):
-        _LOGGER.info(f"Starting to listen connected")
+        try:
+            _LOGGER.info(f"Starting to listen connected")
 
-        subscription_data = self.get_subscription_data()
-        await self._ws.send_str(subscription_data)
+            subscription_data = self.get_subscription_data()
+            await self._ws.send_str(subscription_data)
 
-        _LOGGER.info("Subscribed to WS payloads")
+            _LOGGER.info("Subscribed to WS payloads")
 
-        async for msg in self._ws:
-            continue_to_next = self.handle_next_message(msg)
+            async for msg in self._ws:
+                continue_to_next = await self.handle_next_message(msg)
 
-            if (
-                not continue_to_next
-                or not self.is_initialized
-                or not self._is_connected
-            ):
-                break
+                if (
+                    not continue_to_next
+                    or not self.is_initialized
+                    or not self._is_connected
+                ):
+                    break
 
-        _LOGGER.info(f"Stop listening")
+            _LOGGER.info(f"Stop listening")
 
-    def handle_next_message(self, msg):
+        except Exception as ex:
+            if self._session is not None and self._session.closed:
+                _LOGGER.info(f"Stopped listen, Error: WS Session closed")
+            else:
+                exc_type, exc_obj, tb = sys.exc_info()
+                line_number = tb.tb_lineno
+
+                _LOGGER.warning(f"Stopped listen, Error: {ex}, Line: {line_number}")
+
+    async def handle_next_message(self, msg):
         _LOGGER.debug(f"Starting to handle next message")
         result = False
 
@@ -185,7 +266,7 @@ class EdgeOSWebSocket:
             if msg.data == "close":
                 result = False
             else:
-                self.parse_message(msg.data)
+                await self.parse_message(msg.data)
 
                 result = True
 
